@@ -517,7 +517,6 @@ class FollowUserItem extends StatelessWidget {
                       context,
                       label: "同屏已选",
                       active: true,
-                      accentColor: theme.colorScheme.secondary,
                     ),
                 ],
               ),
@@ -626,6 +625,44 @@ class FollowUserItem extends StatelessWidget {
     );
   }
 
+  /// 多选模式的选中指示：未选中是空心圆，选中填充主题色并显示白色对勾。
+  Widget _buildMultiSelectIndicator(BuildContext context) {
+    final theme = Theme.of(context);
+    final selected = selectedForMultiRoom;
+    return Tooltip(
+      message: selected ? "取消同屏选择" : "选择加入同屏",
+      child: Container(
+        width: 30,
+        height: 30,
+        decoration: BoxDecoration(
+          shape: BoxShape.circle,
+          color: selected ? theme.colorScheme.primary : Colors.transparent,
+          border: Border.all(
+            color: selected
+                ? theme.colorScheme.primary
+                : theme.colorScheme.outline,
+            width: 1.6,
+          ),
+          boxShadow: selected
+              ? [
+                  BoxShadow(
+                    color: theme.colorScheme.primary.withAlpha(70),
+                    blurRadius: 6,
+                  ),
+                ]
+              : null,
+        ),
+        child: Icon(
+          selected ? Icons.check : Icons.add,
+          size: 17,
+          color: selected
+              ? theme.colorScheme.onPrimary
+              : theme.colorScheme.outline,
+        ),
+      ),
+    );
+  }
+
   Widget _buildActionArea(
     BuildContext context, {
     required bool compact,
@@ -633,21 +670,7 @@ class FollowUserItem extends StatelessWidget {
   }) {
     final iconSize = compact ? 18.0 : 20.0;
     final children = <Widget>[
-      if (multiSelectMode)
-        Tooltip(
-          message: selectedForMultiRoom ? "取消同屏选择" : "选择加入同屏",
-          child: SizedBox(
-            width: 32,
-            height: 32,
-            child: Icon(
-              selectedForMultiRoom ? Icons.check_circle : Icons.circle_outlined,
-              size: 22,
-              color: selectedForMultiRoom
-                  ? Theme.of(context).colorScheme.secondary
-                  : Theme.of(context).colorScheme.onSurfaceVariant,
-            ),
-          ),
-        )
+      if (multiSelectMode) _buildMultiSelectIndicator(context)
       else if (onSpecialTap != null)
         IconButton(
           tooltip: item.isSpecialFollow ? "取消特别关注" : "特别关注",
@@ -701,7 +724,7 @@ class FollowUserItem extends StatelessWidget {
             .clamp(0, 255)
             .toInt();
     final color = selectedForMultiRoom
-        ? theme.colorScheme.secondary
+        ? theme.colorScheme.primary
         : playing
             ? theme.colorScheme.primary
             : theme.colorScheme.outlineVariant.withAlpha(idleBorderAlpha);
