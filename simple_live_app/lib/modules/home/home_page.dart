@@ -4,6 +4,7 @@ import 'package:simple_live_app/app/app_style.dart';
 import 'package:simple_live_app/app/sites.dart';
 import 'package:simple_live_app/modules/home/home_controller.dart';
 import 'package:simple_live_app/modules/home/home_list_view.dart';
+import 'package:simple_live_app/routes/app_navigation.dart';
 
 class HomePage extends GetView<HomeController> {
   const HomePage({Key? key}) : super(key: key);
@@ -41,6 +42,11 @@ class HomePage extends GetView<HomeController> {
                 .toList(),
           ),
           actions: [
+            IconButton(
+              tooltip: "多画面",
+              onPressed: () => AppNavigator.toMultiRoom(),
+              icon: const Icon(Icons.grid_view_rounded),
+            ),
             IconButton(
               onPressed: controller.toSearch,
               icon: const Icon(Icons.search),

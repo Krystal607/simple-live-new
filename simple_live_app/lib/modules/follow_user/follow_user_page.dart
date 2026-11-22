@@ -85,23 +85,46 @@ class FollowUserPage extends GetView<FollowUserController> {
             ),
           ),
           if (PlatformUtils.supportsInlineMultiRoom) ...[
-            Obx(
-              () => TextButton.icon(
-                onPressed: controller.multiSelectMode.value
+            Obx(() {
+              final active = controller.multiSelectMode.value;
+              // 手机 AppBar 放不下文字按钮，窄屏只留图标 + tooltip。
+              final compact = MediaQuery.sizeOf(context).width < 720;
+              final icon = Icon(
+                active ? Icons.grid_view : Icons.grid_view_outlined,
+              );
+              if (compact) {
+                return IconButton(
+                  tooltip: active ? "开始同看" : "多画面同看",
+                  onPressed: active
+                      ? controller.openSelectedMultiRooms
+                      : controller.toggleMultiSelectMode,
+                  icon: icon,
+                );
+              }
+              return TextButton.icon(
+                onPressed: active
                     ? controller.openSelectedMultiRooms
                     : controller.toggleMultiSelectMode,
-                icon: Icon(
-                  controller.multiSelectMode.value
-                      ? Icons.grid_view
-                      : Icons.grid_view_outlined,
-                ),
+                icon: icon,
                 label: Text(
-                  controller.multiSelectMode.value
-                      ? "开始同屏(${controller.selectedMultiRoomKeys.length})"
-                      : "多开同屏",
+                  active
+                      ? "开始同看(${controller.selectedMultiRoomKeys.length})"
+                      : "多画面同看",
+                ),
+              );
+            }),
+            if (controller.canOpenSeparateWindows &&
+                MediaQuery.sizeOf(context).width >= 1000)
+              Obx(
+                () => Visibility(
+                  visible: controller.multiSelectMode.value,
+                  child: TextButton.icon(
+                    onPressed: controller.openSelectedMultiRoomsInWindows,
+                    icon: const Icon(Icons.open_in_new, size: 18),
+                    label: const Text("独立窗口"),
+                  ),
                 ),
               ),
-            ),
             Obx(
               () => Visibility(
                 visible: controller.multiSelectMode.value,

@@ -169,18 +169,22 @@ class MpvOptionsService {
     'volume-max': '300',
   };
 
-  static Future<void> applyToPlayer(Player player) async {
+  static Future<void> applyToPlayer(
+    Player player, {
+    bool audioExclusive = true,
+  }) async {
     if (player.platform is! NativePlayer) {
       return;
     }
     final nativePlayer = player.platform as dynamic;
     // iOS 的视频管线固定，只应用网络默认参数；audio-exclusive 使 mpv 不使用
     // MixWithOthers，与 AppDelegate 的 .playback 类别保持一致。
+    // 多画面会同时开多路播放器，独占音频输出会互相抢占，调用方传 false。
     if (Platform.isIOS) {
       final iosOptions = <String, String>{
         ...audioDefaultOptions,
         ...networkDefaultOptions,
-        'audio-exclusive': 'yes',
+        if (audioExclusive) 'audio-exclusive': 'yes',
       };
       for (final entry in iosOptions.entries) {
         try {

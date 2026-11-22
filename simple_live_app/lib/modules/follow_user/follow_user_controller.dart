@@ -9,7 +9,6 @@ import 'package:simple_live_app/app/controller/base_controller.dart';
 import 'package:simple_live_app/app/controller/app_settings_controller.dart';
 import 'package:simple_live_app/app/event_bus.dart';
 import 'package:simple_live_app/app/log.dart';
-import 'package:simple_live_app/app/platform_utils.dart';
 import 'package:simple_live_app/app/sites.dart';
 import 'package:simple_live_app/app/utils.dart';
 import 'package:simple_live_app/models/db/follow_user.dart';
@@ -557,9 +556,6 @@ class FollowUserController extends BasePageController<FollowUser> {
   }
 
   void toggleMultiSelectMode() {
-    if (!PlatformUtils.supportsInlineMultiRoom) {
-      return;
-    }
     multiSelectMode.value = !multiSelectMode.value;
     if (!multiSelectMode.value) {
       selectedMultiRoomKeys.clear();
@@ -567,9 +563,6 @@ class FollowUserController extends BasePageController<FollowUser> {
   }
 
   void toggleMultiRoomItem(FollowUser item) {
-    if (!PlatformUtils.supportsInlineMultiRoom) {
-      return;
-    }
     if (item.liveStatus.value != 2) {
       SmartDialog.showToast("只能选择直播中的关注");
       return;
@@ -581,26 +574,44 @@ class FollowUserController extends BasePageController<FollowUser> {
     selectedMultiRoomKeys.add(item.id);
   }
 
-  void openSelectedMultiRooms() async {
-    if (!PlatformUtils.supportsInlineMultiRoom) {
-      SmartDialog.showToast("当前移动端版本已关闭多开同屏");
-      return;
-    }
-    final selected = list
+  /// 桌面端是否还能用「独立窗口多开」（多显示器时仍有价值）。
+  bool get canOpenSeparateWindows => DesktopMultiWindowService.isSupported;
+
+  List<MultiRoomItem> _selectedMultiRoomItems() {
+    return list
         .where((item) =>
             selectedMultiRoomKeys.contains(item.id) &&
             item.liveStatus.value == 2 &&
             Sites.allSites.containsKey(item.siteId))
         .map(MultiRoomItem.fromFollow)
         .toList();
+  }
+
+  /// 把选中的关注放进同一个多画面里播放（默认行为）。
+  void openSelectedMultiRooms() {
+    final selected = _selectedMultiRoomItems();
+    if (selected.isEmpty) {
+      SmartDialog.showToast("请先选择直播中的关注");
+      return;
+    }
+    multiSelectMode.value = false;
+    selectedMultiRoomKeys.clear();
+    AppNavigator.toMultiRoom(selected);
+  }
+
+  /// 兼容旧行为：桌面端为每个直播间开一个独立窗口。
+  Future<void> openSelectedMultiRoomsInWindows() async {
+    final selected = _selectedMultiRoomItems();
     if (selected.length < 2) {
-      SmartDialog.showToast("至少选择 2 个直播中的关注");
+      SmartDialog.showToast("独立窗口至少需要选择 2 个直播中的关注");
       return;
     }
     if (await DesktopMultiWindowService.openRooms(selected)) {
+      multiSelectMode.value = false;
+      selectedMultiRoomKeys.clear();
       return;
     }
-    AppNavigator.toMultiRoom(selected);
+    SmartDialog.showToast("当前平台不支持独立窗口多开");
   }
 
   void toggleSpecialFollow(FollowUser item) async {

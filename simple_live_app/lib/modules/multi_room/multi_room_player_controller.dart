@@ -1,7 +1,5 @@
 import 'dart:async';
-import 'dart:io';
 
-import 'package:flutter_smart_dialog/flutter_smart_dialog.dart';
 import 'package:get/get.dart';
 import 'package:media_kit/media_kit.dart';
 import 'package:media_kit_video/media_kit_video.dart';
@@ -11,6 +9,11 @@ import 'package:simple_live_app/modules/multi_room/multi_room_models.dart';
 import 'package:simple_live_app/services/mpv_options_service.dart';
 import 'package:simple_live_core/simple_live_core.dart';
 
+/// 多画面里的一路播放器。
+///
+/// 每个画面都有独立的 [Player] / [VideoController]（独立解码 + 独立纹理），
+/// 音频不再由本类自己决定：出声与否由 [MultiRoomController] 按「音频焦点」
+/// 统一仲裁，本类只负责把音量真正下发到 media_kit。
 class MultiRoomPlayerController extends GetxController {
   final MultiRoomItem item;
 
@@ -33,9 +36,14 @@ class MultiRoomPlayerController extends GetxController {
   final loading = true.obs;
   final liveStatus = false.obs;
   final errorText = "".obs;
-  final muted = true.obs;
   final qualityInfo = "".obs;
   final lineInfo = "".obs;
+
+  /// 是否为当前出声的画面，由多画面控制器统一仲裁。
+  final audible = false.obs;
+
+  /// 本画面相对 App 音量的增益（0-1）。
+  final volume = 1.0.obs;
 
   List<LivePlayQuality> _qualities = const [];
   List<String> _playUrls = const [];
@@ -44,6 +52,9 @@ class MultiRoomPlayerController extends GetxController {
   int _lineIndex = 0;
   bool _disposed = false;
   int _loadGeneration = 0;
+  Future<void>? _opening;
+  StreamSubscription<String>? _errorSubscription;
+  StreamSubscription<bool>? _completedSubscription;
 
   bool _isLoadCurrent(int generation) {
     return !_disposed && generation == _loadGeneration;
@@ -60,8 +71,36 @@ class MultiRoomPlayerController extends GetxController {
   @override
   void onInit() {
     super.onInit();
-    unawaited(MpvOptionsService.applyToPlayer(player));
-    unawaited(load());
+    unawaited(_bootstrap());
+  }
+
+  /// mpv 参数必须在 `open()` 之前生效（`volume-max`、断流重连参数），
+  /// 否则第一路会带着默认参数起播。
+  Future<void> _bootstrap() async {
+    // 新建的播放器默认满音量；先按「未获得音频焦点」压到 0，
+    // 避免格子刚起播就抢声音。
+    unawaited(_applyVolume());
+    _errorSubscription = player.stream.error.listen((error) {
+      if (_disposed) {
+        return;
+      }
+      if (errorText.value.isEmpty) {
+        errorText.value = error;
+      }
+    });
+    _completedSubscription = player.stream.completed.listen((completed) {
+      if (_disposed || !completed) {
+        return;
+      }
+      if (errorText.value.isEmpty) {
+        errorText.value = "播放已结束，可点刷新重试";
+      }
+    });
+    await MpvOptionsService.applyToPlayer(player, audioExclusive: false);
+    if (_disposed) {
+      return;
+    }
+    await load();
   }
 
   Future<void> load() async {
@@ -104,7 +143,7 @@ class MultiRoomPlayerController extends GetxController {
         return;
       }
       Log.e(
-        "多开直播间加载失败：${item.site.id}/${item.roomId} $e",
+        "多画面直播间加载失败：${item.site.id}/${item.roomId} $e",
         StackTrace.current,
       );
       errorText.value = e.toString();
@@ -173,18 +212,19 @@ class MultiRoomPlayerController extends GetxController {
     if (AppSettingsController.instance.playerForceHttps.value) {
       url = url.replaceAll("http://", "https://");
     }
-    await player.open(Media(url, httpHeaders: _playHeaders));
+    final opening = player.open(Media(url, httpHeaders: _playHeaders));
+    _opening = opening;
+    try {
+      await opening;
+    } finally {
+      if (identical(_opening, opening)) {
+        _opening = null;
+      }
+    }
     if (!_isLoadCurrent(generation)) {
       return;
     }
-    await player.setVolume(
-      PlayerVolumePolicy.internalVolume(
-        mobile: Platform.isAndroid || Platform.isIOS,
-        muted: muted.value,
-        persisted: AppSettingsController.instance.playerVolume.value,
-        boostEnabled: AppSettingsController.instance.volumeBoostEnable.value,
-      ),
-    );
+    await _applyVolume();
     if (!_isLoadCurrent(generation)) {
       return;
     }
@@ -192,27 +232,86 @@ class MultiRoomPlayerController extends GetxController {
 
   Future<void> refreshRoom() async {
     await load();
-    SmartDialog.showToast("已刷新 ${item.userName}");
   }
 
-  Future<void> toggleMute() async {
-    muted.value = !muted.value;
-    await player.setVolume(
-      PlayerVolumePolicy.internalVolume(
-        mobile: Platform.isAndroid || Platform.isIOS,
-        muted: muted.value,
-        persisted: AppSettingsController.instance.playerVolume.value,
-        boostEnabled: AppSettingsController.instance.volumeBoostEnable.value,
-      ),
-    );
+  /// 由多画面控制器调用：本画面是否出声。
+  void setAudible(bool value) {
+    if (audible.value == value) {
+      return;
+    }
+    audible.value = value;
+    unawaited(_applyVolume());
+  }
+
+  /// 本画面的音量增益（0-1）。
+  void setGain(double value) {
+    final next = value.clamp(0.0, 1.0).toDouble();
+    if (volume.value == next) {
+      return;
+    }
+    volume.value = next;
+    unawaited(_applyVolume());
+  }
+
+  /// 全局音量变化后重新下发一次（焦点没变也会被调用）。
+  void reapplyVolume() {
+    unawaited(_applyVolume());
+  }
+
+  /// 把「App 音量 × 本画面增益」换算成 media_kit 需要的内部音量。
+  ///
+  /// 静音（未获得音频焦点、全部静音、增益为 0）一律下发 0，
+  /// 避免任何一路在后台偷偷出声。
+  ///
+  /// 这里不套用主播放器的「移动端基础段交给系统音量」策略：多画面同一时刻
+  /// 只有一格出声，用户拖的那一格滑杆必须真的变小，否则滑杆在手机上形同虚设。
+  Future<void> _applyVolume() async {
+    if (_disposed) {
+      return;
+    }
+    final gain = volume.value.clamp(0.0, 1.0);
+    final base = AppSettingsController.instance.playerVolume.value;
+    final resolved = (!audible.value || gain <= 0)
+        ? 0.0
+        : (base * gain).clamp(0.0, PlayerVolumePolicy.maxVolume).toDouble();
+    try {
+      await player.setVolume(resolved);
+    } catch (e) {
+      Log.d("多画面音量设置失败：${item.key} $e", false);
+    }
   }
 
   @override
   void onClose() {
     _disposed = true;
     _loadGeneration += 1;
-    unawaited(player.stop());
-    unawaited(player.dispose());
+    unawaited(_errorSubscription?.cancel());
+    _errorSubscription = null;
+    unawaited(_completedSubscription?.cancel());
+    _completedSubscription = null;
+    unawaited(_release());
     super.onClose();
+  }
+
+  /// 先等可能在飞的 `open()` 结束，再串行 stop → dispose。
+  /// 直接并发调用会踩到「dispose 时 open 还在跑」的原生崩溃/黑块。
+  ///
+  /// `stop()` 之后留一小段时间再 `dispose()`：画面被移除/页面正在退场时，
+  /// `Video` 组件要到下一帧甚至转场结束才卸载，先让视频纹理安静下来。
+  Future<void> _release() async {
+    try {
+      final opening = _opening;
+      if (opening != null) {
+        await opening.timeout(
+          const Duration(seconds: 5),
+          onTimeout: () {},
+        );
+      }
+      await player.stop();
+      await Future<void>.delayed(const Duration(milliseconds: 400));
+      await player.dispose();
+    } catch (e, stackTrace) {
+      Log.e("多画面播放器释放失败：${item.key} $e", stackTrace);
+    }
   }
 }
