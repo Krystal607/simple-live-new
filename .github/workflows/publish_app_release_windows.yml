@@ -134,5 +134,5 @@ jobs:
           files: |
             simple_live_app/build/dist/*/*.zip
             simple_live_app/build/dist/*/*.exe
-
+ 
       - run: echo "Windows job status is ${{ job.status }}."
